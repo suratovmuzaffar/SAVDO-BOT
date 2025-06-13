@@ -1,343 +1,324 @@
-import { Telegraf, Context } from "telegraf";
-import { Update } from "telegraf/typings/core/types/typegram";
-import * as dotenv from "dotenv";
-
+import dotenv from "dotenv";
 dotenv.config();
 
-if (!process.env.BOT_TOKEN) {
-  throw new Error("BOT_TOKEN muhit o'zgaruvchisi kerak!");
+import { Telegraf, Context } from "telegraf";
+import { ChatPermissions } from "telegraf/typings/core/types/typegram";
+import { Message } from "telegraf/typings/core/types/typegram";
+
+// .env dan token olish
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+if (!BOT_TOKEN) {
+  console.error("❌ BOT_TOKEN yo‘q! .env faylni tekshir.");
+  process.exit(1);
 }
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+class SavdoBot {
+  private bot: Telegraf;
+  private unmuteUsers: Set<number>;
 
-// Admin ID'larini olish
-const adminIds =
-  process.env.ADMIN_IDS?.split(",").map((id) => parseInt(id.trim())) || [];
+  constructor() {
+    this.bot = new Telegraf(BOT_TOKEN!);
+    this.unmuteUsers = new Set();
+    this.setupHandlers();
+  }
+  /**
+   * Guruhdagi barcha foydalanuvchilarni mute qilish
+   */
+  private async autoMuteAll(chatId: number): Promise<void> {
+    try {
+      const permissions: ChatPermissions = {
+        can_send_messages: false,
+        can_send_polls: false,
+        can_send_other_messages: false,
+        can_add_web_page_previews: false,
+        can_change_info: false,
+        can_invite_users: false,
+        can_pin_messages: false,
+      };
 
-// Admin tekshirish funksiyasi
-const isAdmin = (userId: number): boolean => {
-  return adminIds.includes(userId);
-};
-
-// Utility funksiyalar
-const formatUptime = (seconds: number): string => {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return `${hours}s ${minutes}d`;
-};
-
-// Bot ishga tushganda
-bot.start((ctx) => {
-  const welcomeMessage = `
-🤖 Savdo Bot'ga xush kelibsiz!
-
-📋 Mavjud komandalar:
-/products - Mahsulotlar ro'yxati
-/order - Buyurtma berish
-/help - Yordam
-
-👨‍💼 Admin komandalar:
-/mute - Guruhni mute qilish
-/unmute - Guruhni unmute qilish
-/stats - Statistika
-
-🛒 Savdo vaqti: 9:00 - 21:00
-📞 Aloqa: @admin_username
-  `;
-
-  ctx.reply(welcomeMessage);
-});
-
-// Yordam komamdasi
-bot.help((ctx) => {
-  const helpMessage = `
-📖 Bot haqida yordam
-
-🔧 Asosiy komandalar:
-• /products - Barcha mahsulotlar ro'yxati
-• /order - Buyurtma berish
-• /help - Ushbu yordam xabari
-
-👨‍💼 Admin komandalar:
-• /mute - Guruhni mute qilish
-• /unmute - Guruhni unmute qilish
-• /stats - Bot statistikasi
-
-❓ Savol-javoblar:
-• Bot qanday ishlaydi? - Guruhda savdo va tartibni nazorat qiladi
-• Buyurtma qanday beriladi? - /order komandasi orqali
-• Muammo bo'lsa kim bilan bog'lanish kerak? - @admin_username
-
-🕐 Ish vaqti: 24/7 faol
-  `;
-
-  ctx.reply(helpMessage);
-});
-
-// Mute komandasi
-bot.command("mute", async (ctx) => {
-  const userId = ctx.from?.id;
-
-  if (!userId || !isAdmin(userId)) {
-    ctx.reply("❌ Bu komandani faqat adminlar ishlatishi mumkin!");
-    return;
+      await this.bot.telegram.setChatPermissions(chatId, permissions);
+      console.log(`Chat ${chatId} mute qilindi`);
+    } catch (error) {
+      console.error(`Mute qilishda xatolik ${chatId}:`, error);
+    }
   }
 
-  if (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") {
-    ctx.reply("❌ Bu komanda faqat guruhlarda ishlaydi!");
-    return;
+  /**
+   * Foydalanuvchini unmute qilish
+   */
+  private async unmuteUser(chatId: number, userId: number): Promise<void> {
+    try {
+      const permissions: ChatPermissions = {
+        can_send_messages: true,
+        can_send_polls: true,
+        can_send_other_messages: true,
+        can_add_web_page_previews: true,
+        can_change_info: false,
+        can_invite_users: false,
+        can_pin_messages: false,
+      };
+
+      await this.bot.telegram.restrictChatMember(chatId, userId, {
+        permissions,
+        until_date: 0, // 0 = cheksiz
+      });
+      this.unmuteUsers.add(userId);
+      console.log(`Foydalanuvchi ${userId} unmute qilindi`);
+    } catch (error) {
+      console.error(`Unmute xatolik ${userId}:`, error);
+    }
   }
 
-  try {
-    // Guruh sozlamalarini o'zgartirish (faqat adminlar yoza oladi)
-    await ctx.setChatPermissions({
-      can_send_messages: false,
-      can_send_videos: false,
-      can_send_polls: false,
-      can_send_other_messages: false,
-      can_add_web_page_previews: false,
-      can_change_info: false,
-      can_invite_users: false,
-      can_pin_messages: false,
-    });
+  /**
+   * Foydalanuvchini mute qilish
+   */
+  private async muteUser(chatId: number, userId: number): Promise<void> {
+    try {
+      const permissions: ChatPermissions = {
+        can_send_messages: false,
+        can_send_polls: false,
+        can_send_other_messages: false,
+        can_add_web_page_previews: false,
+        can_change_info: false,
+        can_invite_users: false,
+        can_pin_messages: false,
+      };
 
-    ctx.reply("✅ Guruh mute qilindi!\n🔒 Faqat adminlar yoza oladi.");
-  } catch (error) {
-    console.error("Guruhni mute qilishda xato:", error);
-    ctx.reply(
-      "❌ Guruhni mute qilishda xato yuz berdi. Botga kerakli admin huquqlari berilganini tekshiring."
-    );
-  }
-});
+      await this.bot.telegram.restrictChatMember(chatId, userId, {
+        permissions,
+        until_date: 0, // 0 = cheksiz
+      });
 
-// Unmute komandasi
-bot.command("unmute", async (ctx) => {
-  const userId = ctx.from?.id;
-
-  if (!userId || !isAdmin(userId)) {
-    ctx.reply("❌ Bu komandani faqat adminlar ishlatishi mumkin!");
-    return;
+      this.unmuteUsers.delete(userId);
+      console.log(`Foydalanuvchi ${userId} mute qilindi`);
+    } catch (error) {
+      console.error(`Mute xatolik ${userId}:`, error);
+    }
   }
 
-  if (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") {
-    ctx.reply("❌ Bu komanda faqat guruhlarda ishlaydi!");
-    return;
+  /**
+   * Admin ekanligini tekshirish
+   */
+  private async isAdmin(chatId: number, userId: number): Promise<boolean> {
+    try {
+      const member = await this.bot.telegram.getChatMember(chatId, userId);
+      return member.status === "administrator" || member.status === "creator";
+    } catch (error) {
+      console.error("Admin tekshirishda xatolik:", error);
+      return false;
+    }
   }
 
-  try {
-    // Guruh sozlamalarini qaytarish (hamma yoza oladi)
-    await ctx.setChatPermissions({
-      can_send_messages: true,
-      can_send_videos: false,
-      can_send_polls: true,
-      can_send_other_messages: true,
-      can_add_web_page_previews: true,
-      can_change_info: false,
-      can_invite_users: true,
-      can_pin_messages: false,
-    });
+  /**
+   * Argumentlarni parse qilish
+   */
+  private parseArgs(text: string): [number, number] | null {
+    const parts = text.trim().split(/\s+/);
+    if (parts.length !== 3) return null;
 
-    ctx.reply("✅ Guruh unmute qilindi!\n💬 Hamma a'zolar yoza oladi.");
-  } catch (error) {
-    console.error("Guruhni unmute qilishda xato:", error);
-    ctx.reply("❌ Guruhni unmute qilishda xato yuz berdi.");
-  }
-});
+    const oluvchiId = parseInt(parts[1]!, 10);
+    const sotuvchiId = parseInt(parts[2]!, 10);
 
-// Mahsulotlar ro'yxati
-bot.command("products", (ctx) => {
-  const products = `
-🛍️ MAHSULOTLAR RO'YXATI
+    if (isNaN(oluvchiId) || isNaN(sotuvchiId)) return null;
 
-📱 Telefonlar:
-• iPhone 15 Pro - $999
-• Samsung Galaxy S24 - $899
-• Xiaomi 14 - $599
-
-💻 Laptoplar:
-• MacBook Air M2 - $1199
-• Dell XPS 13 - $999
-• Lenovo ThinkPad - $799
-
-🎧 Aksessuarlar:
-• AirPods Pro - $249
-• Sony WH-1000XM5 - $399
-• Anker PowerBank - $49
-
-💳 To'lov usullari:
-• Naqd pul ✅
-• Plastik karta ✅
-• Bank o'tkazmasi ✅
-
-🚚 Yetkazib berish: 1-3 kun ichida
-📞 Buyurtma: /order komandasi orqali
-  `;
-
-  ctx.reply(products);
-});
-
-// Buyurtma berish
-bot.command("order", (ctx) => {
-  const userName = ctx.from?.first_name || "Foydalanuvchi";
-  const userId = ctx.from?.id;
-
-  const orderMessage = `
-🛒 BUYURTMA BERISH
-
-👋 Salom ${userName}!
-
-📋 Buyurtma berish uchun:
-1. Kerakli mahsulotni tanlang
-2. Miqdorini bildiring
-3. Manzil va telefon raqamingizni yuboring
-
-📞 Aloqa:
-• Telegram: @admin_username
-• Telefon: +998 90 123 45 67
-
-⏰ Ish vaqti: 9:00 - 21:00
-🚚 Yetkazib berish: 1-3 kun
-
-💡 Maslahat: Tezroq javob olish uchun to'liq ma'lumot yuboring!
-  `;
-
-  ctx.reply(orderMessage);
-
-  // Admin ga xabar yuborish
-  if (adminIds.length > 0) {
-    const adminNotification = `
-🔔 YANGI BUYURTMA SO'ROVI
-
-👤 Mijoz: ${userName}
-🆔 ID: ${userId}
-📅 Vaqt: ${new Date().toLocaleString("uz-UZ")}
-
-👆 Mijoz bilan bog'laning!
-    `;
-
-    adminIds.forEach((adminId) => {
-      bot.telegram.sendMessage(adminId, adminNotification);
-    });
-  }
-});
-
-// Stats komandasi (faqat adminlar uchun)
-bot.command("stats", (ctx) => {
-  const userId = ctx.from?.id;
-
-  if (!userId || !isAdmin(userId)) {
-    ctx.reply("❌ Bu komandani faqat adminlar ishlatishi mumkin!");
-    return;
+    return [oluvchiId, sotuvchiId];
   }
 
-  const uptime = process.uptime();
-  const uptimeFormatted = formatUptime(uptime);
+  /**
+   * Handler larni sozlash
+   */
+  private setupHandlers(): void {
+    // /startSavdo buyrug'i
+    this.bot.command("startSavdo", async (ctx: Context) => {
+      const chatId = ctx.chat?.id;
+      const userId = ctx.from?.id;
 
-  const stats = `
-📊 **BOT STATISTIKASI**
+      if (!ctx.message || !("text" in ctx.message)) {
+        await ctx.reply("❌ Xatolik: Ma'lumotlar to'liq emas!");
+        return;
+      }
+      const messageText = ctx.message.text;
 
-⏱️ **Ishlash vaqti:** ${uptimeFormatted}
-🤖 **Bot holati:** Faol
-💾 **Xotira:** ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
-🔄 **Restart:** ${new Date().toLocaleString("uz-UZ")}
+      if (!chatId || !userId || !messageText) {
+        await ctx.reply("❌ Xatolik: Ma'lumotlar to'liq emas!");
+        return;
+      }
 
-📈 **Bugungi ko'rsatkichlar:**
-• Xabarlar: N/A
-• Buyurtmalar: N/A
-• Yangi a'zolar: N/A
+      // Faqat guruh yoki superguruhda ishlaydi
+      if (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") {
+        await ctx.reply("❌ Bu buyruq faqat guruhlarda ishlaydi!");
+        return;
+      }
 
-🎯 **Maqsad:** Guruhni tartibli va savdoni oson qilish!
-  `;
+      // Admin tekshirish
+      if (!(await this.isAdmin(chatId, userId))) {
+        await ctx.reply("❌ Faqat adminlar bu buyruqni ishlatishi mumkin!");
+        return;
+      }
 
-  ctx.reply(stats, { parse_mode: "Markdown" });
-});
+      // Argumentlarni parse qilish
+      const args = this.parseArgs(messageText);
+      if (!args) {
+        await ctx.reply(
+          "❌ To'g'ri format:\n/startSavdo oluvchiID sotuvchiID\n\n" +
+            "Misol: /startSavdo 123456789 987654321"
+        );
+        return;
+      }
 
-// Yangi a'zo qo'shilganda
-bot.on("new_chat_members", (ctx) => {
-  const newMembers = ctx.message.new_chat_members;
+      const [oluvchiId, sotuvchiId] = args;
 
-  if (newMembers) {
-    newMembers.forEach((member) => {
-      if (!member.is_bot) {
-        const welcomeMessage = `
-👋 **Xush kelibsiz, ${member.first_name}!**
+      try {
+        // Ikkalasini unmute qilish
+        await this.unmuteUser(chatId, oluvchiId);
+        await this.unmuteUser(chatId, sotuvchiId);
 
-🛒 **Bizning savdo guruhimizga xush kelibsiz!**
-
-📋 **Qoidalar:**
-• Faqat savdo haqida gaplashing
-• Spam va reklama taqiqlangan
-• Hurmatli muloqat qiling
-
-💡 **Foydali komandalar:**
-• /products - Mahsulotlar ro'yxati
-• /order - Buyurtma berish
-• /help - Yordam
-
-🎉 **Xarid qiling va zavqlaning!**
-        `;
-
-        ctx.reply(welcomeMessage, { parse_mode: "Markdown" });
+        await ctx.replyWithHTML(
+          `🔵 Savdo boshlandi!\n\n` +
+            `🤵‍♂️ Oluvchi ID: <a href="tg://user?id=${oluvchiId}">${oluvchiId}</a>\n` +
+            `🧑‍💼 Sotuvchi ID: <a href="tg://user?id=${sotuvchiId}">${sotuvchiId}</a>\n\n` +
+            `SAVDODA OMAD TILAYMAN`
+        );
+      } catch (error) {
+        await ctx.reply(`❌ Xatolik: ${String(error)}`);
       }
     });
+
+    // /endSavdo buyrug'i
+    this.bot.command("endSavdo", async (ctx: Context) => {
+      const chatId = ctx.chat?.id;
+      const userId = ctx.from?.id;
+
+      if (!ctx.message || !("text" in ctx.message)) {
+        await ctx.reply("❌ Xatolik: Ma'lumotlar to'liq emas!");
+        return;
+      }
+
+      const messageText = ctx.message.text;
+
+      if (!chatId || !userId) {
+        await ctx.reply("❌ Xatolik: Ma'lumotlar to'liq emas!");
+        return;
+      }
+
+      // Faqat guruh yoki superguruhda ishlaydi
+      if (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") {
+        await ctx.reply("❌ Bu buyruq faqat guruhlarda ishlaydi!");
+        return;
+      }
+
+      // Admin tekshirish
+      if (!(await this.isAdmin(chatId, userId))) {
+        await ctx.reply("❌ Faqat adminlar bu buyruqni ishlatishi mumkin!");
+        return;
+      }
+
+      // Argumentlarni parse qilish
+      const args = this.parseArgs(messageText);
+      if (!args) {
+        await ctx.reply(
+          "❌ To'g'ri format:\n/endSavdo oluvchiID sotuvchiID\n\n" +
+            "Misol: /endSavdo 123456789 987654321"
+        );
+        return;
+      }
+
+      const [oluvchiId, sotuvchiId] = args;
+
+      try {
+        // Ikkalasini mute qilish
+        await this.muteUser(chatId, oluvchiId);
+        await this.muteUser(chatId, sotuvchiId);
+
+        await ctx.replyWithHTML(
+          `🔴 Savdo tugadi!\n\n` +
+            `🤵‍♂️ Oluvchi ID: <a href="tg://user?id=${oluvchiId}">${oluvchiId}</a>\n` +
+            `🧑‍💼 Sotuvchi ID: <a href="tg://user?id=${sotuvchiId}">${sotuvchiId}</a>\n\n` +
+            `SAVDO YAKUNLANDI 🎉 \n SAVDOINGIZ UCHUN RAHMAT 🤝 `
+        );
+      } catch (error) {
+        await ctx.reply(`❌ Xatolik: ${String(error)}`);
+      }
+    });
+
+    // Oddiy xabarlarni boshqarish
+    this.bot.on("text", async (ctx: Context) => {
+      const chatId = ctx.chat?.id;
+      const userId = ctx.from?.id;
+      const messageId = ctx.message?.message_id;
+
+      if (!chatId || !userId || !messageId) return;
+
+      // Faqat guruh yoki superguruhda ishlaydi
+      if (ctx.chat?.type !== "group" && ctx.chat?.type !== "supergroup") {
+        return;
+      }
+
+      try {
+        // Admin tekshirish
+        if (await this.isAdmin(chatId, userId)) {
+          // Admin har doim yoza oladi
+          return;
+        }
+
+        // Unmute ro'yxatida tekshirish
+        if (this.unmuteUsers.has(userId)) {
+          // Unmute qilingan, xabarni qoldirish
+          return;
+        }
+
+        // Admin ham emas, unmute ham emas - xabarni o'chirish
+        try {
+          await this.bot.telegram.deleteMessage(chatId, messageId);
+        } catch (deleteError) {
+          console.error("Xabar o'chirishda xatolik:", deleteError);
+        }
+      } catch (error) {
+        // Xatolik bo'lsa, xabarni o'chirish
+        try {
+          await this.bot.telegram.deleteMessage(chatId, messageId);
+        } catch (deleteError) {
+          console.error("Xabar o'chirishda xatolik:", deleteError);
+        }
+      }
+    });
+
+    // Xato handler
+    this.bot.catch((error, ctx) => {
+      console.error("Bot xatoligi:", error);
+      console.error("Context:", ctx);
+    });
   }
-});
 
-// Kiruvchi xabarlarni filtrlash
-bot.on("text", (ctx) => {
-  if (!ctx.message || !("text" in ctx.message)) return;
-
-  const text = ctx.message.text.toLowerCase();
-  const spamWords = ["reklama", "spam", "click", "link", "telegram.me"];
-
-  // Spam tekshirish
-  if (spamWords.some((word) => text.includes(word))) {
+  /**
+   * Botni ishga tushirish
+   */
+  public async start(): Promise<void> {
     try {
-      ctx.deleteMessage().catch(() => {
-        // Agar xabarni o'chira olmasa, ogohlantirishni yuborish
-        ctx.reply("⚠️ Spam aniqlandi! Iltimos bunday xabarlar yubormang.");
-      });
+      console.log("🤖 SAVDO-BOT ishga tushmoqda...");
+      console.log("📝 Bot run bo'lganda guruhdagi hamma mute bo'ladi");
+      console.log(
+        "🔓 /startSavdo oluvchiID sotuvchiID - foydalanuvchilarni unmute qilish"
+      );
+      console.log(
+        "🔒 /endSavdo oluvchiID sotuvchiID - foydalanuvchilarni mute qilish"
+      );
+
+      await this.bot.launch();
+      console.log("✅ Bot muvaffaqiyatli ishga tushdi!");
+
+      // Graceful shutdown
+      process.once("SIGINT", () => this.bot.stop("SIGINT"));
+      process.once("SIGTERM", () => this.bot.stop("SIGTERM"));
     } catch (error) {
-      console.error("Xabarni o'chirishda xato:", error);
-    }
-    return;
-  }
-
-  // Savdo vaqtini tekshirish
-  const currentHour = new Date().getHours();
-  if (currentHour < 9 || currentHour > 21) {
-    if (
-      text.includes("sotish") ||
-      text.includes("narx") ||
-      text.includes("buyurtma")
-    ) {
-      ctx.reply("🕐 Savdo vaqti: 9:00 - 21:00\n⏰ Hozir savdo vaqti emas!");
+      console.error("Bot ishga tushirishda xatolik:", error);
     }
   }
-});
-
-// Xatoliklarni ushlash
-bot.catch((err, ctx) => {
-  console.error("Bot xatosi:", err);
-  ctx.reply("❌ Xatolik yuz berdi. Keyinroq urinib ko'ring.");
-});
+}
 
 // Botni ishga tushirish
-bot.launch({
-  allowedUpdates: ["message", "callback_query", "chat_member"],
-});
+const bot = new SavdoBot();
+bot.start().catch(console.error);
 
-console.log("🚀 Savdo bot ishga tushdi!");
-console.log("📅 Vaqt:", new Date().toLocaleString("uz-UZ"));
-console.log("🤖 Bot nomi: Telegram Savdo Bot");
-
-// Graceful shutdown
-process.once("SIGINT", () => {
-  console.log("⏹️ Bot to'xtatilmoqda...");
-  bot.stop("SIGINT");
-});
-
-process.once("SIGTERM", () => {
-  console.log("⏹️ Bot to'xtatilmoqda...");
-  bot.stop("SIGTERM");
-});
+export default SavdoBot;
